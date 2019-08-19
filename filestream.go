@@ -15,18 +15,18 @@ type Stream struct {
 	quit        chan struct{}
 }
 
-func New(filename string) *Stream {
+func New(filename string) (*Stream, error) {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	return &Stream{
 		file:        file,
-		streamRead:  make(chan string),
 		streamWrite: make(chan string),
+		streamRead:  make(chan string),
 		quit:        make(chan struct{}),
-	}
+	}, nil
 }
 
 func (s *Stream) Writer() chan string {
@@ -47,12 +47,17 @@ func (s *Stream) writeHandler() {
 	}
 }
 
-func (s *Stream) Reader() chan string {
+func (s *Stream) ReaderWithFilter(filter ...func(string) bool) <-chan string {
+	go s.readHandler(filter...)
+	return s.streamRead
+}
+
+func (s *Stream) Reader() <-chan string {
 	go s.readHandler()
 	return s.streamRead
 }
 
-func (s *Stream) readHandler() {
+func (s *Stream) readHandler(filter ...func(string) bool) {
 	log.Printf("reader starting")
 	scanner := bufio.NewScanner(s.file)
 
@@ -60,7 +65,17 @@ func (s *Stream) readHandler() {
 	scanner.Buffer(buf, 10*1024*1024)
 
 	for scanner.Scan() {
-		s.streamRead <- scanner.Text()
+		data := scanner.Text()
+
+		write := true
+		for _, f := range filter {
+			if f(data) {
+				write = false
+			}
+		}
+		if write {
+			s.streamRead <- data
+		}
 	}
 	s.streamRead <- "eof"
 	log.Printf("reader exiting")
